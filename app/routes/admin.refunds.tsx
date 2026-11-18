@@ -2,11 +2,11 @@ import { useFetcher, data, isRouteErrorResponse, Link } from "react-router";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Route } from "./+types/admin.refunds";
 import { getCurrentUserId } from "~/lib/session";
 import { parseFormData } from "~/lib/validation";
-import { formatPrice } from "~/lib/utils";
+import { formatDuration, formatPrice } from "~/lib/utils";
 import {
   canDecideRefund,
   statusAfterDecision,
@@ -20,11 +20,16 @@ import { db } from "~/db";
 import {
   UserRole,
   RefundStatus,
+  LessonProgressStatus,
   courses,
   enrollments,
+  lessonProgress,
+  lessons,
+  modules,
   purchases,
   refunds,
   users,
+  videoWatchEvents,
 } from "~/db/schema";
 
 const refundDecisionSchema = z.discriminatedUnion("intent", [
@@ -56,6 +61,58 @@ const refundStatusClasses: Record<RefundStatus, string> = {
     "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
   [RefundStatus.Declined]: "bg-muted text-muted-foreground",
 };
+
+/**
+ * What the learner has done on the course, for the admin to read when they
+ * decide. Progress is kept after access ends, so this is the full history.
+ */
+function getProgress(userId: number, courseId: number) {
+  const lessonIds = db
+    .select({ id: lessons.id })
+    .from(lessons)
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(eq(modules.courseId, courseId))
+    .all()
+    .map((row) => row.id);
+
+  if (lessonIds.length === 0) {
+    return { completed: 0, total: 0, secondsWatched: 0 };
+  }
+
+  const completed =
+    db
+      .select({ count: sql<number>`count(*)` })
+      .from(lessonProgress)
+      .where(
+        and(
+          eq(lessonProgress.userId, userId),
+          eq(lessonProgress.status, LessonProgressStatus.Completed),
+          inArray(lessonProgress.lessonId, lessonIds)
+        )
+      )
+      .get()?.count ?? 0;
+
+  const furthestPerLesson = db
+    .select({
+      furthest: sql<number>`max(${videoWatchEvents.positionSeconds})`,
+    })
+    .from(videoWatchEvents)
+    .where(
+      and(
+        eq(videoWatchEvents.userId, userId),
+        inArray(videoWatchEvents.lessonId, lessonIds)
+      )
+    )
+    .groupBy(videoWatchEvents.lessonId)
+    .all();
+
+  const secondsWatched = furthestPerLesson.reduce(
+    (total, row) => total + row.furthest,
+    0
+  );
+
+  return { completed, total: lessonIds.length, secondsWatched };
+}
 
 /** Admins only. Instructors do not decide refunds, even for their own courses. */
 function requireAdmin(userId: number | null) {
@@ -131,14 +188,16 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const showAll = new URL(request.url).searchParams.get("status") === "all";
 
-  const rows = db
+  const found = db
     .select({
       id: refunds.id,
       status: refunds.status,
       reason: refunds.reason,
       decisionNote: refunds.decisionNote,
       requestedAt: refunds.requestedAt,
+      courseId: courses.id,
       courseTitle: courses.title,
+      learnerId: users.id,
       learnerName: users.name,
       learnerEmail: users.email,
       amountPaid: purchases.amountPaid,
@@ -150,6 +209,11 @@ export async function loader({ request }: Route.LoaderArgs) {
     .where(showAll ? undefined : eq(refunds.status, RefundStatus.Requested))
     .orderBy(desc(refunds.requestedAt))
     .all();
+
+  const rows = found.map((row) => ({
+    ...row,
+    progress: getProgress(row.learnerId, row.courseId),
+  }));
 
   return { refunds: rows, showAll };
 }
@@ -323,6 +387,12 @@ export default function AdminRefunds({ loaderData }: Route.ComponentProps) {
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm">{row.reason}</p>
+
+              <div className="rounded-md bg-muted/50 p-3 text-sm">
+                <span className="font-medium">Progress:</span>{" "}
+                {row.progress.completed} of {row.progress.total} lessons
+                completed · {formatDuration(Math.round(row.progress.secondsWatched / 60), true, false, false)} video reached
+              </div>
 
               {row.status === RefundStatus.Approved && (
                 <p className="text-sm text-muted-foreground">

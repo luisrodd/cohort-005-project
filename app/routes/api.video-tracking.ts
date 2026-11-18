@@ -4,7 +4,9 @@ import type { Route } from "./+types/api.video-tracking";
 import { getCurrentUserId } from "~/lib/session";
 import { parseJsonBody } from "~/lib/validation";
 import { db } from "~/db";
-import { videoWatchEvents } from "~/db/schema";
+import { lessons, modules, videoWatchEvents } from "~/db/schema";
+import { eq } from "drizzle-orm";
+import { getAccess } from "~/lib/access.server";
 
 const videoTrackingSchema = z.object({
   lessonId: z.number(),
@@ -25,6 +27,24 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   const { lessonId, eventType, positionSeconds } = parsed.data;
+
+  const lesson = db
+    .select({ courseId: modules.courseId })
+    .from(lessons)
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(eq(lessons.id, lessonId))
+    .get();
+
+  if (!lesson) {
+    throw data("Lesson not found", { status: 404 });
+  }
+
+  // Video reached only counts while the learner has access. Once an enrollment
+  // is gone, progress stops growing but the history stays.
+  const access = await getAccess(request, lesson.courseId);
+  if (!access.canViewContent) {
+    throw data("You must be enrolled in this course.", { status: 403 });
+  }
 
   db
     .insert(videoWatchEvents)

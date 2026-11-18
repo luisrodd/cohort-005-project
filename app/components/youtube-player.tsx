@@ -210,7 +210,7 @@ export function YouTubePlayer({
       {trackingEnabled && (
         <div className="mt-2">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>Watch progress</span>
+            <span>Video reached</span>
             <span>{progress}%</span>
           </div>
           <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
