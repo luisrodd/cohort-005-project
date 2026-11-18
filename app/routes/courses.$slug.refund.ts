@@ -191,7 +191,7 @@ export async function action({ params, request }: Route.ActionArgs) {
   }
 
   if (watchedSeconds >= MAX_WATCHED_HOURS * 60 * 60) {
-    throw data("You have watched too much of this course to request a refund.", {
+    throw data("You have reached too much of this course's video to request a refund.", {
       status: 403,
     });
   }

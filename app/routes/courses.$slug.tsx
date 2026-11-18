@@ -366,7 +366,6 @@ function rateCourse(userId: number, courseId: number, rating: number) {
 
 const CANCEL_WINDOW_DAYS = 14;
 const CANCEL_WATCH_LIMIT_SECONDS = 2 * 60 * 60;
-const CANCEL_COMPLETION_LIMIT = 0.5;
 
 function getPurchaseForCourse(userId: number, courseId: number) {
   return db
@@ -384,24 +383,6 @@ function getRefundStatusesForPurchase(purchaseId: number) {
     .where(eq(refunds.purchaseId, purchaseId))
     .all()
     .map((row) => row.status);
-}
-
-function getCompletedLessonCount(userId: number, lessonIds: number[]) {
-  if (lessonIds.length === 0) return 0;
-
-  const result = db
-    .select({ count: sql<number>`count(*)` })
-    .from(lessonProgress)
-    .where(
-      and(
-        eq(lessonProgress.userId, userId),
-        eq(lessonProgress.status, LessonProgressStatus.Completed),
-        inArray(lessonProgress.lessonId, lessonIds)
-      )
-    )
-    .get();
-
-  return result?.count ?? 0;
 }
 
 function getSecondsWatched(userId: number, lessonIds: number[]) {
@@ -459,13 +440,6 @@ function getCancellationOffer(
   if (!isWithinWindow) return null;
 
   const lessonIds = getCourseLessonIds(course.id);
-
-  if (lessonIds.length > 0) {
-    const completedCount = getCompletedLessonCount(userId, lessonIds);
-    if (completedCount / lessonIds.length >= CANCEL_COMPLETION_LIMIT) {
-      return null;
-    }
-  }
 
   if (getSecondsWatched(userId, lessonIds) >= CANCEL_WATCH_LIMIT_SECONDS) {
     return null;
